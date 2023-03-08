@@ -1,0 +1,159 @@
+---
+title: "Rec Center"
+author: "Athena Kwok"
+date: "2023-02-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(stringr)
+library(zoo)
+library(openxlsx)
+```
+
+
+```{r}
+rec <- read_excel("Rec_Interval_Data.xlsx")
+```
+
+
+```{r}
+# Rename to EntrancesExits EE
+rec <- rec %>%
+  rename(EE = `EntrancesExits `)
+
+# Remove "Entrances Exits" Rows
+rec_EnEx <- rec[!grepl("Entrances Exits", rec$EE),]
+
+#Remove the timestamp pages that tells you when you downloaded the data
+rec_pg <- rec_EnEx %>% 
+  filter(!grepl("Page", EE))
+
+#Remove the week rows
+rec_wk <- rec_pg %>% 
+  filter(!grepl("Week", EE))
+
+#parse out/ remove the days of the week 
+rec_wk$EE <- str_remove_all(rec_wk$EE, "[:alpha:][:alpha:][:alpha:], ")
+
+#remove the ending 0 and space arround it 
+rec_wk$EE <- str_remove_all(rec_wk$EE, "\\s0\\s$")
+```
+
+
+```{r}
+#make new column and only take the entrance numbers 
+rec_wk$Entrances <- ifelse(str_detect(rec_wk$EE, "2022") == TRUE, 
+                           sub(".*2022 ", "", rec_wk$EE), 
+                           sub(".*M ", "", rec_wk$EE))
+
+
+#remove the entrance numbers from the original column
+rec_wk$EE <- str_remove_all(rec_wk$EE, "[:digit:]+$")
+```
+
+
+```{r}
+write.xlsx(rec_wk, 'rec_clean1.xlsx')
+```
+
+```{r}
+rec_temp <- read_excel("intervals_final.xlsx")
+```
+
+
+```{r}
+# Define a function to convert time values to 24-hour format
+to_24hr <- function(x) {
+  ifelse(str_sub(x, -2) == "PM", paste0(as.numeric(str_sub(x, 1, 2))+12, str_sub(x, 3, 5), " - ", as.numeric(str_sub(str_split(x, " - ")[[1]][2], 1, 2))+12, str_sub(str_split(x, " - ")[[1]][2], 3, 5)),
+         str_replace(x, "(^| )([0-9]{1}):", "\\1 0\\2:"))
+}
+```
+
+
+```{r}
+# add 0 infront of 9
+rec_temp_temp <- rec_temp %>%
+  mutate(time = str_replace(Time, "\\b9", "09"))
+
+# use function to change into 24 hour clock
+rec_temp_1 <- rec_temp_temp %>% 
+  mutate(time2 = to_24hr(time))
+
+# was only wrong for 12:45 - 01:15 PM so manually changed it all 
+rec_temp_2 <- rec_temp_1 %>% 
+  mutate(time3 = ifelse(time2 == "24:45 - 18:15", "12:45 - 13:15", time2))
+
+# select columns and remove the AMs 
+rec_temp_3 <- rec_temp_2 %>%
+  select(Date, time3, Entrances) %>%
+  mutate(Time = str_replace(time3, " AM", ""))
+```
+
+
+```{r}
+#extract the hour from the Time column
+rec_temp2 <- rec_temp_3 %>%
+  mutate(Hour = as.numeric(substr(Time, 1, 2)))
+
+#replace NA values with 9
+#rec_temp2$Hour[is.na(rec_temp2$Hour)] <- 9
+
+#remove the Time variable and change Entrances into a numeric type 
+rec_temp3 <- rec_temp2 %>%
+  select(-time3) %>%
+  mutate(Entrances = as.numeric(Entrances))
+```
+
+
+```{r}
+#group the data frame by Date and Hour, and summarize the Entrances column
+rec_final <- rec_temp3 %>%
+  group_by(Date, Hour) %>%
+  summarize(SumEntrances = sum(Entrances))
+
+#view the result
+head(rec_final)
+```
+
+```{r}
+rec_final2 <- rec_final
+
+# Combine Date and Hour columns into a new column DateTime
+rec_final2$DateTime <- as.POSIXct(paste(rec_final2$Date, sprintf("%02d:00:00", rec_final2$Hour)), format="%Y-%m-%d %H:%M:%S")
+
+rec_final2 <- rec_final2 %>%
+  select(DateTime, Date, Hour, SumEntrances) %>%
+  rename(Entrances = SumEntrances)
+  
+head(rec_final2)
+```
+
+```{r}
+write.xlsx(rec_final2, 'rec_final_hour_24.xlsx')
+write.csv(rec_final2, "rec_final_hour_24.csv")
+```
+
+```{r}
+#buiest time 
+rec_final2 %>%
+  group_by(Hour) %>%
+  summarise(SumEntrances = sum(Entrances)) %>%
+  arrange(desc(SumEntrances))
+# busiest time is 4-6PM, 11AM, 2-3PM, Noon, 10AM 
+
+# none busy time 
+rec_final2 %>%
+  group_by(Hour) %>%
+  summarise(SumEntrances = sum(Entrances)) %>%
+  arrange(SumEntrances)
+# non busy time 5AM, 10-11PM, 6-7AM, 10PM
+```
+
+
